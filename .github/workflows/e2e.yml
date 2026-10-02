@@ -44,6 +44,12 @@ jobs:
           if q "SELECT count(*) FROM sales.orders" 2>/dev/null; then echo "raw table readable"; exit 1; fi
           echo "bi_reader: reads views only, cannot write"
 
+      - name: Screenshot the public dashboard
+        run: |
+          npx -y playwright@1.47.2 install --with-deps chromium > /dev/null
+          path=$(python3 -c "import json;print(json.load(open('timings.json'))['public_path'])")
+          npx -y playwright@1.47.2 screenshot --viewport-size=1280,900 --wait-for-timeout=20000 "http://localhost:3000$path" dashboard.png
+
       - name: Report
         if: always()
         run: |
@@ -56,6 +62,7 @@ jobs:
           path: |
             timings.env
             timings.json
+            dashboard.png
 
       - name: Clean up
         if: always()
