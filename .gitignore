@@ -1,0 +1,4 @@
+.env
+timings.json
+timings.env
+__pycache__/

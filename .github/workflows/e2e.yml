@@ -1,0 +1,62 @@
+name: End-to-end install
+
+# Brings the whole stack up from nothing on a clean runner, configures Metabase from code,
+# checks the security boundaries and records how long each step took.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate throwaway secrets
+        run: |
+          for k in WAREHOUSE_OWNER_PASSWORD BI_READER_PASSWORD METABASE_DB_PASSWORD; do
+            echo "$k=$(openssl rand -hex 16)" >> .env
+          done
+          echo "METABASE_ADMIN_EMAIL=admin@example.com" >> .env
+          echo "METABASE_ADMIN_PASSWORD=A$(openssl rand -hex 12)!" >> .env
+
+      - name: Pull images
+        run: |
+          start=$(date +%s); docker compose pull -q; echo "pull_s=$(( $(date +%s) - start ))" >> timings.env
+
+      - name: Start the stack and wait for health
+        run: |
+          start=$(date +%s); docker compose up -d --wait --wait-timeout 600; echo "up_and_healthy_s=$(( $(date +%s) - start ))" >> timings.env
+
+      - name: Configure Metabase from code
+        run: |
+          set -a; . ./.env; set +a
+          python3 setup/metabase_setup.py
+
+      - name: The BI role cannot write and cannot read raw tables
+        run: |
+          set -a; . ./.env; set +a
+          q() { docker compose exec -T -e PGPASSWORD="$BI_READER_PASSWORD" warehouse psql -h localhost -U bi_reader -d warehouse -tAc "$1"; }
+          q "SELECT count(*) FROM bi.revenue_by_month"
+          if q "INSERT INTO sales.orders VALUES (0, now(), 'x', 'x', 1, 1)" 2>/dev/null; then echo "write allowed"; exit 1; fi
+          if q "SELECT count(*) FROM sales.orders" 2>/dev/null; then echo "raw table readable"; exit 1; fi
+          echo "bi_reader: reads views only, cannot write"
+
+      - name: Report
+        if: always()
+        run: |
+          cat timings.env timings.json 2>/dev/null | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-results
+          path: |
+            timings.env
+            timings.json
+
+      - name: Clean up
+        if: always()
+        run: docker compose down -v
